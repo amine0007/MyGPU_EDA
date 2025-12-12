@@ -53,7 +53,7 @@ int main() {
     // On utilise 2 points par échantillon pour dessiner des "marches" carrées
     sf::VertexArray waveform(sf::LineStrip, NB_SAMPLES * 2);
 
-    float zoom = 10.0f;     // 10 pixels par unité de temps
+    float zoom = 50.0f;     // 50 pixels par unité de temps
     float yBase = 250.0f;   // Position Y du 0 (Bas de l'écran)
     float hauteur = 100.0f; // Hauteur du signal (Voltage)
 
