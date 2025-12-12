@@ -1,0 +1,2 @@
+#!/bin/bash
+java -jar $(dirname "$0")/antlr4.jar -Dlanguage=Cpp -no-listener -visitor "$@"
