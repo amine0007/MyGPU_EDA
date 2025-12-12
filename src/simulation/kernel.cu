@@ -1,50 +1,82 @@
 #include <cuda_runtime.h>
 #include <iostream>
+#include "Netlist.hpp" // On inclut notre nouvelle structure
 
-// ... (Garde le __global__ void simulateAndGates tel quel au début) ...
-__global__ void simulateAndGates(int* entreeA, int* entreeB, int* sorties, int nombreDePortes) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < nombreDePortes) {
-        sorties[i] = entreeA[i] & entreeB[i];
+__global__ void simulateCircuit(Gate* gates, int* signals, int nbGates) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < nbGates) {
+        Gate g = gates[idx];
+        
+        // Lecture des valeurs d'entrée depuis le tableau global "signals"
+        int val1 = signals[g.input1_id];
+        int val2 = signals[g.input2_id];
+        int result = 0;
+
+        // La logique câblée
+        switch(g.type) {
+            case GATE_AND: result = val1 & val2; break;
+            case GATE_OR:  result = val1 | val2; break;
+            case GATE_XOR: result = val1 ^ val2; break;
+            case GATE_NOT: result = !val1;       break; // !0 = 1, !1 = 0
+        }
+
+        // Écriture du résultat
+        signals[g.output_id] = result;
     }
 }
 
-// --- MODIFICATION ICI ---
-// On change la signature pour accepter un pointeur vers le tableau de résultats
-extern "C" void launchGPUCalculation(int* host_results, int N) {
-    size_t size = N * sizeof(int);
+extern "C" void launchGPUCalculation(int* host_waveform_out, int nb_cycles) {
+    // --- 1. DÉFINITION DU CIRCUIT (On crée 3 portes manuellement pour tester) ---
+    // Fil 0 et 1 = Entrées. Fil 2 = Sortie AND. Fil 3 = Sortie OR. Fil 4 = Sortie XOR.
+    int numGates = 3;
+    size_t gateSize = numGates * sizeof(Gate);
+    
+    Gate h_gates[3];
+    // Porte 0 : AND (Fil 0 & Fil 1 -> Fil 2)
+    h_gates[0] = {GATE_AND, 0, 1, 2}; 
+    // Porte 1 : OR  (Fil 0 | Fil 1 -> Fil 3)
+    h_gates[1] = {GATE_OR,  0, 1, 3}; 
+    // Porte 2 : XOR (Fil 0 ^ Fil 1 -> Fil 4)
+    h_gates[2] = {GATE_XOR, 0, 1, 4};
 
-    // 1. Allocation Host (On utilise les tableaux temporaires pour les entrées seulement)
-    int *h_A, *h_B;
-    cudaMallocHost(&h_A, size);
-    cudaMallocHost(&h_B, size);
+    // --- 2. PRÉPARATION MÉMOIRE ---
+    int numSignals = 5; // On a 5 fils au total
+    int* d_signals;
+    Gate* d_gates;
+    
+    cudaMalloc(&d_signals, numSignals * sizeof(int));
+    cudaMalloc(&d_gates, gateSize);
+    
+    // On envoie la liste des portes au GPU (une seule fois, ça ne change pas)
+    cudaMemcpy(d_gates, h_gates, gateSize, cudaMemcpyHostToDevice);
 
-    // 2. Remplissage (On simule une horloge : 0 1 0 1 0 1...)
-    for (int i = 0; i < N; i++) {
-        h_A[i] = 1;      
-        h_B[i] = i % 2;  // Cela va créer une oscillation parfaite
+    // --- 3. BOUCLE TEMPORELLE (Simulation cycle par cycle) ---
+    // Pour chaque instant t, on met à jour les entrées et on calcule
+    for (int t = 0; t < nb_cycles; t++) {
+        
+        // A. On génère des signaux d'entrée (Stimuli)
+        // Fil 0 : Horloge rapide (0, 1, 0, 1...)
+        // Fil 1 : Horloge lente  (0, 0, 1, 1...)
+        int inputs[2];
+        inputs[0] = t % 2;
+        inputs[1] = (t / 2) % 2; 
+
+        // On envoie juste les entrées au GPU
+        cudaMemcpy(d_signals, inputs, 2 * sizeof(int), cudaMemcpyHostToDevice);
+
+        // B. On lance le calcul des portes
+        simulateCircuit<<<1, 256>>>(d_gates, d_signals, numGates);
+        cudaDeviceSynchronize();
+
+        // C. On récupère le résultat du Fil 4 (XOR) pour l'afficher
+        int val_sortie;
+        cudaMemcpy(&val_sortie, &d_signals[4], sizeof(int), cudaMemcpyDeviceToHost);
+        
+        // On stocke pour l'affichage
+        host_waveform_out[t] = val_sortie;
     }
 
-    // 3. Allocation GPU
-    int *d_A, *d_B, *d_Out;
-    cudaMalloc(&d_A, size);
-    cudaMalloc(&d_B, size);
-    cudaMalloc(&d_Out, size);
-
-    // 4. Copie CPU -> GPU
-    cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
-
-    // 5. Run Kernel
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
-    simulateAndGates<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_Out, N);
-    cudaDeviceSynchronize();
-
-    // 6. RÉCUPÉRATION (On copie directement dans le tableau fourni par le Main)
-    cudaMemcpy(host_results, d_Out, size, cudaMemcpyDeviceToHost);
-
-    // Nettoyage
-    cudaFree(d_A); cudaFree(d_B); cudaFree(d_Out);
-    cudaFreeHost(h_A); cudaFreeHost(h_B);
+    cudaFree(d_signals);
+    cudaFree(d_gates);
 }

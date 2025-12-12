@@ -1,6 +1,7 @@
 #include <SFML/Graphics.hpp>
 #include <iostream>
 #include <vector>
+#include <Netlist.hpp>
 
 const int NB_SAMPLES = 1000; // On affiche les 1000 premiers points
 
