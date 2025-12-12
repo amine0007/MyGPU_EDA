@@ -60,7 +60,7 @@ extern "C" void launchGPUCalculation(int* host_waveform_out, int nb_cycles) {
         // Fil 1 : Horloge lente  (0, 0, 1, 1...)
         int inputs[2];
         inputs[0] = t % 2;
-        inputs[1] = (t / 2) % 2; 
+        inputs[1] = (t / 3) % 2; 
 
         // On envoie juste les entrées au GPU
         cudaMemcpy(d_signals, inputs, 2 * sizeof(int), cudaMemcpyHostToDevice);
