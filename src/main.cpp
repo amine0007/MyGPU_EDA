@@ -1,37 +1,29 @@
 #include <SFML/Graphics.hpp>
 #include <iostream>
 
-// Code spécifique CUDA (ne sera compilé que si CUDA est présent)
-#ifdef USE_CUDA
-    #include <cuda_runtime.h>
-    void checkGPU() {
-        int deviceCount;
-        cudaGetDeviceCount(&deviceCount);
-        std::cout << "Nombre de GPU NVIDIA detectes : " << deviceCount << std::endl;
-    }
-#else
-    void checkGPU() {
-        std::cout << "Pas de CUDA detecte (Mode CPU / Codespaces)" << std::endl;
-    }
-#endif
+// Déclaration de la fonction externe (qui est dans le .cu)
+extern "C" void launchGPUCalculation();
 
 int main() {
-    std::cout << "Demarrage de MyEDA..." << std::endl;
-    checkGPU();
+    std::cout << "=== MyGPU_EDA Simulator ===" << std::endl;
 
-    sf::RenderWindow window(sf::VideoMode(800, 600), "MyGPU_EDA - Test");
-    sf::CircleShape shape(100.f);
-    shape.setFillColor(sf::Color::Green);
+    // Test de la simulation GPU
+    #ifdef USE_CUDA
+        launchGPUCalculation();
+    #else
+        std::cout << "Erreur: CUDA non active." << std::endl;
+    #endif
 
+    // La fenêtre SFML (On la garde pour plus tard)
+    sf::RenderWindow window(sf::VideoMode(400, 200), "GPU Simulation Done");
+    
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
                 window.close();
         }
-
         window.clear();
-        window.draw(shape);
         window.display();
     }
 
