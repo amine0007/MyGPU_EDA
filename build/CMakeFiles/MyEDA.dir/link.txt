@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/MyEDA.dir/src/main.cpp.o -o MyEDA  /usr/lib/x86_64-linux-gnu/libsfml-graphics.so.2.6.1 /usr/lib/x86_64-linux-gnu/libsfml-window.so.2.6.1 /usr/lib/x86_64-linux-gnu/libsfml-system.so.2.6.1 /usr/lib/x86_64-linux-gnu/libantlr4-runtime.so 
