@@ -1,99 +1,100 @@
 #include <SFML/Graphics.hpp>
 #include <iostream>
 #include <vector>
-#include <Netlist.hpp>
+#include <fstream>  // Pour lire les fichiers
+#include <sstream>  // Pour découper les textes
+#include "Netlist.hpp"
 
-// Nombre d'échantillons (cycles d'horloge) à simuler
 const int NB_SAMPLES = 1000;
 
-// Déclaration de la fonction CUDA (définie dans kernel.cu)
-// extern "C" est crucial pour lier du C++ avec du CUDA
-extern "C" void launchGPUCalculation(int* host_results, int N);
+// Signature mise à jour : on envoie le circuit (Gates) au GPU
+extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, int* host_results, int N);
+
+// --- FONCTION PARSER ---
+std::vector<Gate> loadCircuit(const std::string& filename) {
+    std::vector<Gate> gates;
+    std::ifstream file(filename);
+    
+    if (!file.is_open()) {
+        std::cerr << "ERREUR: Impossible d'ouvrir " << filename << std::endl;
+        return gates;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        
+        std::stringstream ss(line);
+        std::string typeStr;
+        int in1, in2, out;
+        
+        ss >> typeStr >> in1 >> in2 >> out;
+        
+        int typeCode = -1;
+        if (typeStr == "AND") typeCode = GATE_AND;
+        else if (typeStr == "OR") typeCode = GATE_OR;
+        else if (typeStr == "XOR") typeCode = GATE_XOR;
+        else if (typeStr == "NOT") typeCode = GATE_NOT;
+
+        if (typeCode != -1) {
+            gates.push_back({typeCode, in1, in2, out});
+            std::cout << "[PARSER] Ajout porte " << typeStr << " (In:" << in1 << "," << in2 << " -> Out:" << out << ")" << std::endl;
+        }
+    }
+    return gates;
+}
 
 int main() {
-    // Création de la fenêtre
-    sf::RenderWindow window(sf::VideoMode(1200, 400), "MyGPU_EDA - Simulation XOR");
+    sf::RenderWindow window(sf::VideoMode(1200, 400), "MyGPU_EDA - Dynamic Loader");
     window.setFramerateLimit(60);
 
-    // Vecteur pour stocker les résultats (0 ou 1) qui viendront du GPU
     std::vector<int> resultats(NB_SAMPLES);
+    
+    // 1. CHARGEMENT DU FICHIER
+    std::cout << "--- Chargement du circuit ---" << std::endl;
+    std::vector<Gate> monCircuit = loadCircuit("circuit.txt");
+    std::cout << "Total portes chargees : " << monCircuit.size() << std::endl;
 
-    std::cout << "=== MyGPU_EDA Simulator ===" << std::endl;
+    if (monCircuit.empty()) {
+        std::cout << "ATTENTION: Circuit vide ou fichier introuvable !" << std::endl;
+    }
 
-    // --- PARTIE SIMULATION ---
+    // 2. SIMULATION
     #ifdef USE_CUDA
-        std::cout << "[INFO] GPU NVIDIA detecte. Lancement du Kernel CUDA..." << std::endl;
+        std::cout << "Lancement Simulation GPU..." << std::endl;
+        // On passe le vecteur de portes au GPU
+        launchGPUCalculation(monCircuit.data(), monCircuit.size(), resultats.data(), NB_SAMPLES);
         
-        // Appel de la fonction magique (kernel.cu)
-        launchGPUCalculation(resultats.data(), NB_SAMPLES);
-
-        // --- VERIFICATION DEBUG (XOR) ---
-        // On affiche les 8 premières valeurs dans la console pour vérifier la logique
-        std::cout << "\n--- VERIFICATION LOGIQUE (XOR) ---" << std::endl;
-        std::cout << "Entree A (Rapide): 0 1 0 1 0 1 0 1" << std::endl;
-        std::cout << "Entree B (Lente) : 0 0 1 1 0 0 1 1" << std::endl;
-        std::cout << "Attendu (XOR)    : 0 1 1 0 0 1 1 0" << std::endl;
-        std::cout << "Recu du GPU      : ";
-        
-        for(int i=0; i<8; i++) {
-            std::cout << resultats[i] << " ";
-        }
-        std::cout << "\n----------------------------------\n" << std::endl;
-        // --------------------------------
-
+        // Debug Console
+        std::cout << "Resultats (Sample): ";
+        for(int i=0; i<10; i++) std::cout << resultats[i] << " ";
+        std::cout << std::endl;
     #else
-        std::cout << "[WARN] Pas de CUDA detecte (Mode CPU/Codespaces). Simulation factice." << std::endl;
-        // Remplissage bidon pour ne pas avoir un écran vide si tu testes sur Codespaces
-        for(int i=0; i<NB_SAMPLES; i++) resultats[i] = (i % 4 == 1 || i % 4 == 2) ? 1 : 0; 
+        for(int i=0; i<NB_SAMPLES; i++) resultats[i] = 0; 
     #endif
 
-    // --- PARTIE VISUALISATION (SFML) ---
-    
-    // On prépare les points géométriques
-    // On utilise 2 points par échantillon pour dessiner des "marches" carrées
+    // 3. VISUALISATION (Code identique à avant)
     sf::VertexArray waveform(sf::LineStrip, NB_SAMPLES * 2);
-
-    float zoom = 50.0f;     // 50 pixels par unité de temps
-    float yBase = 250.0f;   // Position Y du 0 (Bas de l'écran)
-    float hauteur = 100.0f; // Hauteur du signal (Voltage)
+    float zoom = 50.0f;
+    float yBase = 250.0f;
+    float hauteur = 100.0f;
 
     for (int i = 0; i < NB_SAMPLES; i++) {
         int val = resultats[i];
-        
-        // Calcul des coordonnées écran
         float x = i * zoom;
-        float y = yBase - (val * hauteur); // On soustrait car Y=0 est en haut de l'écran
-
-        // Point A (Début du cycle t)
-        waveform[i * 2].position = sf::Vector2f(x, y);
-        waveform[i * 2].color = sf::Color::Green;
-
-        // Point B (Fin du cycle t, pour faire le plat du signal carré)
-        waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y);
-        waveform[i * 2 + 1].color = sf::Color::Green;
+        float y = yBase - (val * hauteur);
+        waveform[i * 2].position = sf::Vector2f(x, y); waveform[i * 2].color = sf::Color::Green;
+        waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y); waveform[i * 2 + 1].color = sf::Color::Green;
     }
 
-    // --- BOUCLE D'AFFICHAGE ---
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
-                window.close();
+            if (event.type == sf::Event::Closed) window.close();
         }
-
         window.clear(sf::Color::Black);
-
-        // 1. Dessiner une ligne grise pour l'axe 0
-        sf::VertexArray axe(sf::Lines, 2);
-        axe[0].position = sf::Vector2f(0, yBase);     axe[0].color = sf::Color(50, 50, 50);
-        axe[1].position = sf::Vector2f(1200, yBase);  axe[1].color = sf::Color(50, 50, 50);
-        window.draw(axe);
-
-        // 2. Dessiner l'onde verte
         window.draw(waveform);
-
         window.display();
     }
-
     return 0;
 }
