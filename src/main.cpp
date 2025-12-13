@@ -1,13 +1,13 @@
 #include <SFML/Graphics.hpp>
 #include <iostream>
 #include <vector>
-#include <fstream>  // Pour lire les fichiers
-#include <sstream>  // Pour découper les textes
+#include <fstream>
+#include <sstream>
 #include "Netlist.hpp"
 
 const int NB_SAMPLES = 1000;
 
-// Signature mise à jour : on envoie le circuit (Gates) au GPU
+// Signature de la fonction CUDA
 extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, int* host_results, int N);
 
 // --- FONCTION PARSER ---
@@ -23,11 +23,9 @@ std::vector<Gate> loadCircuit(const std::string& filename) {
     std::string line;
     while (std::getline(file, line)) {
         if (line.empty()) continue;
-        
         std::stringstream ss(line);
         std::string typeStr;
         int in1, in2, out;
-        
         ss >> typeStr >> in1 >> in2 >> out;
         
         int typeCode = -1;
@@ -38,45 +36,38 @@ std::vector<Gate> loadCircuit(const std::string& filename) {
 
         if (typeCode != -1) {
             gates.push_back({typeCode, in1, in2, out});
-            std::cout << "[PARSER] Ajout porte " << typeStr << " (In:" << in1 << "," << in2 << " -> Out:" << out << ")" << std::endl;
         }
     }
     return gates;
 }
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode(1200, 400), "MyGPU_EDA - Dynamic Loader");
+    sf::RenderWindow window(sf::VideoMode(1200, 400), "MyGPU_EDA - Ultimate Simulator");
     window.setFramerateLimit(60);
 
     std::vector<int> resultats(NB_SAMPLES);
     
-    // 1. CHARGEMENT DU FICHIER
-    std::cout << "--- Chargement du circuit ---" << std::endl;
+    // 1. CHARGEMENT
     std::vector<Gate> monCircuit = loadCircuit("circuit.txt");
-    std::cout << "Total portes chargees : " << monCircuit.size() << std::endl;
-
     if (monCircuit.empty()) {
-        std::cout << "ATTENTION: Circuit vide ou fichier introuvable !" << std::endl;
+        // Circuit par défaut si fichier vide
+        std::cout << "Fichier vide/absent. Chargement circuit test." << std::endl;
+        monCircuit.push_back({GATE_XOR, 0, 1, 4}); 
     }
 
     // 2. SIMULATION
     #ifdef USE_CUDA
-        std::cout << "Lancement Simulation GPU..." << std::endl;
-        // On passe le vecteur de portes au GPU
         launchGPUCalculation(monCircuit.data(), monCircuit.size(), resultats.data(), NB_SAMPLES);
-        
-        // Debug Console
-        std::cout << "Resultats (Sample): ";
-        for(int i=0; i<10; i++) std::cout << resultats[i] << " ";
-        std::cout << std::endl;
     #else
-        for(int i=0; i<NB_SAMPLES; i++) resultats[i] = 0; 
+        for(int i=0; i<NB_SAMPLES; i++) resultats[i] = i%2; 
     #endif
 
-    // 3. VISUALISATION (Code identique à avant)
+    // 3. VISUALISATION
     sf::VertexArray waveform(sf::LineStrip, NB_SAMPLES * 2);
+    
+    // Variables de navigation
     float zoom = 50.0f;
-    float offsetX = 0.0f;
+    float offsetX = 50.0f;
     float yBase = 250.0f;
     float hauteur = 100.0f;
 
@@ -84,52 +75,59 @@ int main() {
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
+        }
+
+        // --- GESTION CLAVIER (FLUIDE) ---
+        // On vérifie l'état des touches directement (hors de la boucle d'événements)
+        
+        // Zoom (Haut / Bas)
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))   zoom *= 1.02f; // Zoom In
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) zoom *= 0.98f; // Zoom Out
+
+        // Scroll (Gauche / Droite)
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))  offsetX += 10.0f;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) offsetX -= 10.0f;
+
+        // Limites de sécurité pour éviter les bugs visuels
+        if (zoom < 1.0f) zoom = 1.0f;       // Zoom minimum
+        if (zoom > 500.0f) zoom = 500.0f;   // Zoom maximum
+
+        window.clear(sf::Color::Black);
+
+        // --- DESSIN INTELLIGENT ---
+        int pointsDessines = 0;
+        for (int i = 0; i < NB_SAMPLES; i++) {
+            int val = resultats[i];
             
-            // --- GESTION CLAVIER ---
-            if (event.type == sf::Event::KeyPressed) {
-                // Zoom : Flèches Haut/Bas
-                if (event.key.code == sf::Keyboard::Up) zoom *= 1.1f;
-                if (event.key.code == sf::Keyboard::Down) zoom *= 0.9f;
+            // Calcul position
+            float x = i * zoom + offsetX;
+            float y = yBase - (val * hauteur);
+
+            // OPTIMISATION : On ne met à jour que les points visibles à l'écran
+            // (Entre -50px et la largeur de la fenêtre + 50px)
+            if (x > -50 && x < 1250) {
+                waveform[i * 2].position = sf::Vector2f(x, y);
+                waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y);
                 
-                // Déplacement : Flèches Gauche/Droite
-                if (event.key.code == sf::Keyboard::Left) offsetX += 50.0f;
-                if (event.key.code == sf::Keyboard::Right) offsetX -= 50.0f;
+                // Couleur verte Matrix
+                waveform[i * 2].color = sf::Color(0, 255, 0);
+                waveform[i * 2 + 1].color = sf::Color(0, 255, 0);
+                pointsDessines++;
+            } else {
+                // Pour éviter les traits qui traversent tout l'écran, on "cache" les points hors champ
+                waveform[i * 2].position = sf::Vector2f(x, y);
+                waveform[i * 2].color = sf::Color::Transparent;
+                waveform[i * 2 + 1].position = sf::Vector2f(x, y);
+                waveform[i * 2 + 1].color = sf::Color::Transparent;
             }
         }
 
-        window.clear(sf::Color::Black);
+        // Axe horizontal (Référence)
+        sf::VertexArray axe(sf::Lines, 2);
+        axe[0].position = sf::Vector2f(0, yBase);     axe[0].color = sf::Color(100, 100, 100);
+        axe[1].position = sf::Vector2f(1200, yBase);  axe[1].color = sf::Color(100, 100, 100);
 
-        // Recalcul des positions à chaque image
-        for (int i = 0; i < NB_SAMPLES; i++) {
-            int val = resultats[i];
-            float x = i * zoom + offsetX; // On ajoute le décalage (scroll)
-            float y = yBase - (val * hauteur);
-
-            // Optimisation : Ne pas dessiner ce qui est hors écran
-            if (x < -50 || x > 1250) continue;
-
-            waveform[i * 2].position = sf::Vector2f(x, y);
-            waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y);
-        }
-
-        window.draw(waveform);
-        window.display();
-    }
-
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        int val = resultats[i];
-        float x = i * zoom;
-        float y = yBase - (val * hauteur);
-        waveform[i * 2].position = sf::Vector2f(x, y); waveform[i * 2].color = sf::Color::Green;
-        waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y); waveform[i * 2 + 1].color = sf::Color::Green;
-    }
-
-    while (window.isOpen()) {
-        sf::Event event;
-        while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed) window.close();
-        }
-        window.clear(sf::Color::Black);
+        window.draw(axe);
         window.draw(waveform);
         window.display();
     }
