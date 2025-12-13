@@ -2,7 +2,6 @@
 #include <iostream>
 #include "Netlist.hpp"
 
-// ... (Garde le __global__ void simulateCircuit EXACTEMENT comme avant) ...
 __global__ void simulateCircuit(Gate* gates, int* signals, int nbGates) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < nbGates) {
@@ -20,49 +19,48 @@ __global__ void simulateCircuit(Gate* gates, int* signals, int nbGates) {
     }
 }
 
-// --- MODIFICATION MAJEURE ICI ---
-// On accepte désormais le tableau de portes (circuit) venant du CPU (main.cpp)
-extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, int* host_waveform_out, int nb_cycles) {
+// Nouvelle signature : on reçoit la liste des sondes (probes)
+extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, 
+                                     int* host_probes, int numProbes, 
+                                     int* host_waveform_out, int nb_cycles) {
     
-    // 1. Calcul de la taille mémoire
     size_t gateSize = numGates * sizeof(Gate);
-    
-    // 2. Préparation Mémoire GPU
-    // On prévoit large pour les fils (ex: 1024 fils possibles)
     int numSignals = 1024; 
     int* d_signals;
     Gate* d_gates;
     
     cudaMalloc(&d_signals, numSignals * sizeof(int));
     cudaMalloc(&d_gates, gateSize);
-    
-    // 3. Copie du Circuit (CPU -> GPU)
-    // C'est ici qu'on envoie ce qu'on a lu dans le fichier texte
     cudaMemcpy(d_gates, host_gates, gateSize, cudaMemcpyHostToDevice);
-    
-    // Mise à zéro des signaux
     cudaMemset(d_signals, 0, numSignals * sizeof(int));
 
-    // 4. BOUCLE TEMPORELLE
+    // BOUCLE TEMPORELLE
     for (int t = 0; t < nb_cycles; t++) {
         
-        // Génération des stimuli (Toujours hardcodé pour l'instant : Horloges sur 0 et 1)
-        int inputs[2];
-        inputs[0] = t % 2;       
-        inputs[1] = (t / 3) % 2; // Notre chaos désynchronisé
+        // Génération Stimuli (Additionneur 3 bits : A, B, Cin)
+        int inputs[3];
+        inputs[0] = t % 2;           // Rapide
+        inputs[1] = (t / 2) % 2;     // Moyen
+        inputs[2] = (t / 4) % 2;     // Lent (Retenue entrée)
 
-        cudaMemcpy(d_signals, inputs, 2 * sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_signals, inputs, 3 * sizeof(int), cudaMemcpyHostToDevice);
 
-        // Lancement du Kernel
         int threads = 256;
         int blocks = (numGates + threads - 1) / threads;
         simulateCircuit<<<blocks, threads>>>(d_gates, d_signals, numGates);
         cudaDeviceSynchronize();
 
-        // On récupère le fil 4 (Notre sortie XOR définie dans le fichier texte)
-        int val_sortie;
-        cudaMemcpy(&val_sortie, &d_signals[4], sizeof(int), cudaMemcpyDeviceToHost);
-        host_waveform_out[t] = val_sortie;
+        // EXTRACTION DES SONDES (Multi-Canaux)
+        for (int p = 0; p < numProbes; p++) {
+            int val_sonde;
+            // On va chercher la valeur du fil demandé par la sonde p
+            int id_fil = host_probes[p];
+            cudaMemcpy(&val_sonde, &d_signals[id_fil], sizeof(int), cudaMemcpyDeviceToHost);
+            
+            // On range ça dans le grand tableau de sortie
+            // Structure : [Temps 0 - Sonde 0, Temps 0 - Sonde 1, ... Temps 1 - Sonde 0...]
+            host_waveform_out[t * numProbes + p] = val_sonde;
+        }
     }
 
     cudaFree(d_signals);

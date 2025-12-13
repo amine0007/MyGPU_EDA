@@ -7,13 +7,17 @@
 
 const int NB_SAMPLES = 1000;
 
-// Signature de la fonction CUDA
-extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, int* host_results, int N);
+// Signature mise à jour pour accepter les sondes
+extern "C" void launchGPUCalculation(Gate* host_gates, int numGates, 
+                                     int* host_probes, int numProbes, 
+                                     int* host_results, int N);
 
 // --- FONCTION PARSER ---
-std::vector<Gate> loadCircuit(const std::string& filename) {
+// Retourne les portes ET remplit la liste des sondes trouvées
+std::vector<Gate> loadCircuit(const std::string& filename, std::vector<int>& probes) {
     std::vector<Gate> gates;
     std::ifstream file(filename);
+    probes.clear();
     
     if (!file.is_open()) {
         std::cerr << "ERREUR: Impossible d'ouvrir " << filename << std::endl;
@@ -25,51 +29,59 @@ std::vector<Gate> loadCircuit(const std::string& filename) {
         if (line.empty()) continue;
         std::stringstream ss(line);
         std::string typeStr;
-        int in1, in2, out;
-        ss >> typeStr >> in1 >> in2 >> out;
-        
-        int typeCode = -1;
-        if (typeStr == "AND") typeCode = GATE_AND;
-        else if (typeStr == "OR") typeCode = GATE_OR;
-        else if (typeStr == "XOR") typeCode = GATE_XOR;
-        else if (typeStr == "NOT") typeCode = GATE_NOT;
+        ss >> typeStr; // Lit le premier mot
 
-        if (typeCode != -1) {
-            gates.push_back({typeCode, in1, in2, out});
+        if (typeStr == "PROBE") {
+            int probeId;
+            ss >> probeId;
+            probes.push_back(probeId);
+            std::cout << "[PARSER] Ajout Sonde sur fil " << probeId << std::endl;
+        }
+        else {
+            int in1, in2, out;
+            ss >> in1 >> in2 >> out;
+            int typeCode = -1;
+            if (typeStr == "AND") typeCode = GATE_AND;
+            else if (typeStr == "OR") typeCode = GATE_OR;
+            else if (typeStr == "XOR") typeCode = GATE_XOR;
+            else if (typeStr == "NOT") typeCode = GATE_NOT;
+            
+            if (typeCode != -1) gates.push_back({typeCode, in1, in2, out});
         }
     }
     return gates;
 }
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode(1200, 400), "MyGPU_EDA - Ultimate Simulator");
+    sf::RenderWindow window(sf::VideoMode(1200, 800), "MyGPU_EDA - Logic Analyzer");
     window.setFramerateLimit(60);
 
-    std::vector<int> resultats(NB_SAMPLES);
-    
-    // 1. CHARGEMENT
-    std::vector<Gate> monCircuit = loadCircuit("circuit.txt");
-    if (monCircuit.empty()) {
-        // Circuit par défaut si fichier vide
-        std::cout << "Fichier vide/absent. Chargement circuit test." << std::endl;
-        monCircuit.push_back({GATE_XOR, 0, 1, 4}); 
-    }
+    std::vector<int> probes;
+    std::vector<Gate> monCircuit = loadCircuit("circuit.txt", probes);
 
-    // 2. SIMULATION
+    // Si pas de sondes, on en met une par défaut (fil 4)
+    if (probes.empty()) probes.push_back(4);
+
+    int nbProbes = probes.size();
+    // Le tableau de résultats doit contenir : NB_SAMPLES * Nombre de Sondes
+    std::vector<int> resultats(NB_SAMPLES * nbProbes);
+
     #ifdef USE_CUDA
-        launchGPUCalculation(monCircuit.data(), monCircuit.size(), resultats.data(), NB_SAMPLES);
+        launchGPUCalculation(monCircuit.data(), monCircuit.size(), 
+                             probes.data(), nbProbes, 
+                             resultats.data(), NB_SAMPLES);
     #else
-        for(int i=0; i<NB_SAMPLES; i++) resultats[i] = i%2; 
+        // Mode simulation bidon CPU
+        for(int t=0; t<NB_SAMPLES; t++) {
+            for(int p=0; p<nbProbes; p++) resultats[t*nbProbes + p] = (t+p)%2;
+        }
     #endif
 
-    // 3. VISUALISATION
-    sf::VertexArray waveform(sf::LineStrip, NB_SAMPLES * 2);
-    
-    // Variables de navigation
-    float zoom = 50.0f;
+    // Interface
+    float zoom = 30.0f;
     float offsetX = 50.0f;
-    float yBase = 250.0f;
-    float hauteur = 100.0f;
+    float rowHeight = 120.0f; // Espace vertical entre chaque courbe
+    float signalHeight = 80.0f; // Hauteur du signal lui-même
 
     while (window.isOpen()) {
         sf::Event event;
@@ -77,58 +89,50 @@ int main() {
             if (event.type == sf::Event::Closed) window.close();
         }
 
-        // --- GESTION CLAVIER (FLUIDE) ---
-        // On vérifie l'état des touches directement (hors de la boucle d'événements)
-        
-        // Zoom (Haut / Bas)
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))   zoom *= 1.02f; // Zoom In
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) zoom *= 0.98f; // Zoom Out
-
-        // Scroll (Gauche / Droite)
+        // Contrôles
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))   zoom *= 1.02f;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) zoom *= 0.98f;
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))  offsetX += 10.0f;
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) offsetX -= 10.0f;
+        if (zoom < 1.0f) zoom = 1.0f; 
 
-        // Limites de sécurité pour éviter les bugs visuels
-        if (zoom < 1.0f) zoom = 1.0f;       // Zoom minimum
-        if (zoom > 500.0f) zoom = 500.0f;   // Zoom maximum
+        window.clear(sf::Color(20, 20, 20)); // Gris très foncé
 
-        window.clear(sf::Color::Black);
-
-        // --- DESSIN INTELLIGENT ---
-        int pointsDessines = 0;
-        for (int i = 0; i < NB_SAMPLES; i++) {
-            int val = resultats[i];
+        // --- DESSIN DES PISTES ---
+        for (int p = 0; p < nbProbes; p++) {
+            // Position Y de base pour cette sonde
+            float yBase = 100.0f + (p * rowHeight);
             
-            // Calcul position
-            float x = i * zoom + offsetX;
-            float y = yBase - (val * hauteur);
+            // Ligne de référence grise
+            sf::VertexArray refLine(sf::Lines, 2);
+            refLine[0].position = sf::Vector2f(0, yBase); refLine[0].color = sf::Color(50,50,50);
+            refLine[1].position = sf::Vector2f(1200, yBase); refLine[1].color = sf::Color(50,50,50);
+            window.draw(refLine);
 
-            // OPTIMISATION : On ne met à jour que les points visibles à l'écran
-            // (Entre -50px et la largeur de la fenêtre + 50px)
-            if (x > -50 && x < 1250) {
-                waveform[i * 2].position = sf::Vector2f(x, y);
-                waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y);
+            // Petit texte (carré de couleur) pour identifier la ligne
+            sf::RectangleShape badge(sf::Vector2f(20, 20));
+            badge.setPosition(10, yBase - 10);
+            badge.setFillColor(sf::Color::Yellow);
+            window.draw(badge);
+
+            // La Courbe
+            sf::VertexArray waveform(sf::LineStrip); // On utilise LineStrip dynamique
+            
+            for (int t = 0; t < NB_SAMPLES; t++) {
+                // Formule magique pour retrouver la bonne valeur dans le tableau 1D
+                int val = resultats[t * nbProbes + p];
                 
-                // Couleur verte Matrix
-                waveform[i * 2].color = sf::Color(0, 255, 0);
-                waveform[i * 2 + 1].color = sf::Color(0, 255, 0);
-                pointsDessines++;
-            } else {
-                // Pour éviter les traits qui traversent tout l'écran, on "cache" les points hors champ
-                waveform[i * 2].position = sf::Vector2f(x, y);
-                waveform[i * 2].color = sf::Color::Transparent;
-                waveform[i * 2 + 1].position = sf::Vector2f(x, y);
-                waveform[i * 2 + 1].color = sf::Color::Transparent;
+                float x = t * zoom + offsetX;
+                float y = yBase - (val * signalHeight);
+
+                if (x > -50 && x < 1250) {
+                    waveform.append(sf::Vertex(sf::Vector2f(x, y), sf::Color::Green));
+                    waveform.append(sf::Vertex(sf::Vector2f(x + zoom, y), sf::Color::Green));
+                }
             }
+            window.draw(waveform);
         }
 
-        // Axe horizontal (Référence)
-        sf::VertexArray axe(sf::Lines, 2);
-        axe[0].position = sf::Vector2f(0, yBase);     axe[0].color = sf::Color(100, 100, 100);
-        axe[1].position = sf::Vector2f(1200, yBase);  axe[1].color = sf::Color(100, 100, 100);
-
-        window.draw(axe);
-        window.draw(waveform);
         window.display();
     }
     return 0;
