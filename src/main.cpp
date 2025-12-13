@@ -76,8 +76,45 @@ int main() {
     // 3. VISUALISATION (Code identique à avant)
     sf::VertexArray waveform(sf::LineStrip, NB_SAMPLES * 2);
     float zoom = 50.0f;
+    float offsetX = 0.0f;
     float yBase = 250.0f;
     float hauteur = 100.0f;
+
+    while (window.isOpen()) {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) window.close();
+            
+            // --- GESTION CLAVIER ---
+            if (event.type == sf::Event::KeyPressed) {
+                // Zoom : Flèches Haut/Bas
+                if (event.key.code == sf::Keyboard::Up) zoom *= 1.1f;
+                if (event.key.code == sf::Keyboard::Down) zoom *= 0.9f;
+                
+                // Déplacement : Flèches Gauche/Droite
+                if (event.key.code == sf::Keyboard::Left) offsetX += 50.0f;
+                if (event.key.code == sf::Keyboard::Right) offsetX -= 50.0f;
+            }
+        }
+
+        window.clear(sf::Color::Black);
+
+        // Recalcul des positions à chaque image
+        for (int i = 0; i < NB_SAMPLES; i++) {
+            int val = resultats[i];
+            float x = i * zoom + offsetX; // On ajoute le décalage (scroll)
+            float y = yBase - (val * hauteur);
+
+            // Optimisation : Ne pas dessiner ce qui est hors écran
+            if (x < -50 || x > 1250) continue;
+
+            waveform[i * 2].position = sf::Vector2f(x, y);
+            waveform[i * 2 + 1].position = sf::Vector2f(x + zoom, y);
+        }
+
+        window.draw(waveform);
+        window.display();
+    }
 
     for (int i = 0; i < NB_SAMPLES; i++) {
         int val = resultats[i];
