@@ -54,6 +54,7 @@ std::vector<Gate> loadCircuit(const std::string& filename, std::vector<ProbeData
             else if (typeStr == "OR") typeCode = GATE_OR;
             else if (typeStr == "XOR") typeCode = GATE_XOR;
             else if (typeStr == "NOT") typeCode = GATE_NOT;
+            else if (typeStr == "DFF") typeCode = GATE_DFF;
             if (typeCode != -1) gates.push_back({typeCode, in1, in2, out});
         }
     }
